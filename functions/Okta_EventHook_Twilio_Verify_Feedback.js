@@ -1,73 +1,121 @@
+const okta = require('@okta/okta-sdk-nodejs');
+
 
 exports.handler = async function(context, event, callback) {
-try {
-    
+  try {
     if (context.auth_secret !== event.request.headers.auth_secret) {
       throw new Error("Authentication failed");
     }
     const oktaBaseUrl = context.okta_org_baseurl;
-    const api_token= context.okta_auth_token;
-    //one off check when enable Okta event inline hook, required by Okta
+    const api_token = context.okta_auth_token;
+
+    // One-off verification check required by Okta when enabling event inline hooks
     const verificationValue = event.request?.headers ? event.request.headers['x-okta-verification-challenge'] : null;
     if (verificationValue) {
-        console.log("Verifying");
-        // Prepare response body
-        const responseBody = { verification: verificationValue };
-        // Return success response
-        callback(null, JSON.stringify(responseBody));
+      console.log("Verifying");
+      const responseBody = { verification: verificationValue };
+      return callback(null, JSON.stringify(responseBody));
     }
-    
-    console.log ("event data: ",event.data);
-    let mfa_event= event.data?.events[0];
-    console.log ("mfa_event: ", mfa_event);
-    let channel=null;
-    //check payload of "user.authentication.auth_via_mfa" and "user.mfa.factor.activate" for SMS OTP and CALL OTP
-    if (mfa_event && mfa_event.outcome?.result === 'SUCCESS'  && (mfa_event.debugContext?.debugData?.factor === 'SMS_FACTOR' || mfa_event.outcome?.reason?.includes("SMS_FACTOR"))) 
-    {channel="sms"} //SMS OTP is used
-    else if   (mfa_event && mfa_event.outcome?.result === 'SUCCESS'  && (mfa_event.debugContext?.debugData?.factor === 'CALL_FACTOR' ||mfa_event.outcome?.reason?.includes("CALL_FACTOR"))) 
-    {channel="call"} //call OTP is used
 
-    if (channel!==null)
-    {
-    const userid=mfa_event.actor?.id;//grab user id
-    const okta=require('@okta/okta-sdk-nodejs');
-    const OktaClient= new okta.Client({ orgUrl: oktaBaseUrl, token: api_token });
-    let phone_number=null;
-    //get the list of enrolled factors (such as sms, call etc)
-    const factors= await OktaClient.userFactorApi.listFactors({ userId: userid });
+    console.log("event data: ", event.data);
 
-    for await (const factor of factors){
+    // Get all events from the array - Okta can bundle multiple events
+    const mfa_events = event.data?.events || [];
 
-      //in Okta, user can enroll different phone numbers for SMS factor and call factor respectively, thus have to grab the phone number based on the actual factor used in MFA
-      if (factor.factorType===channel) {
-         phone_number=factor.profile.phoneNumber;
-          console.log ("MFA factor is:", channel);
-          console.log ("MFA phone number is:", phone_number);
+    if (!Array.isArray(mfa_events) || mfa_events.length === 0) {
+      console.log("No events to process");
+      return callback(null, "No events to process");
+    }
+
+    console.log(`Processing ${mfa_events.length} event(s)`);
+
+    const OktaClient = new okta.Client({ orgUrl: oktaBaseUrl, token: api_token });
+    const client = context.getTwilioClient();
+
+    const results = [];
+
+    // Process each event in the array
+    for (const [index, mfa_event] of mfa_events.entries()) {
+      console.log(`Processing event ${index + 1}/${mfa_events.length}:`, mfa_event);
+      let channel = null;
+
+      // Checks payload for SMS OTP or CALL OTP factor types
+      if (mfa_event && mfa_event.outcome?.result === 'SUCCESS' &&
+          (mfa_event.debugContext?.debugData?.factor === 'SMS_FACTOR' ||
+          mfa_event.outcome?.reason?.includes("SMS_FACTOR"))) {
+        channel = "sms";
+      }
+      else if (mfa_event && mfa_event.outcome?.result === 'SUCCESS' &&
+              (mfa_event.debugContext?.debugData?.factor === 'CALL_FACTOR' ||
+                mfa_event.outcome?.reason?.includes("CALL_FACTOR"))) {
+        channel = "call";
+      }
+
+      if (channel !== null) {
+        const userid = mfa_event.actor?.id;
+        let phone_number = null;
+
+        const factors = await OktaClient.userFactorApi.listFactors({ userId: userid });
+
+        for await (const factor of factors) {
+          if (factor.factorType === channel) {
+            phone_number = factor.profile.phoneNumber;
+            console.log(`Event ${index + 1} - MFA factor is:`, channel);
+            console.log(`Event ${index + 1} - MFA phone number is:`, phone_number);
+            break; // Found the matching factor
+          }
+        }
+
+        if (phone_number === null) {
+          console.log(`Event ${index + 1} - Can't retrieve phone number, possible not SMS OTP or Voice OTP MFA factor`);
+          results.push({
+            eventIndex: index + 1,
+            status: 'skipped',
+            reason: "Can't retrieve phone number"
+          });
+          continue;
+        }
+
+        try {
+          let verification = await client.verify.v2.services(context.VERIFY_SID)
+            .verifications(phone_number).update({status: 'approved'});
+
+          console.log(`Event ${index + 1} - Verification updated:`, verification);
+          results.push({
+            eventIndex: index + 1,
+            status: 'success',
+            phone_number: phone_number,
+            verification_sid: verification.sid
+          });
+        } catch (verifyError) {
+          console.error(`Event ${index + 1} - Error updating verification:`, verifyError);
+          results.push({
+            eventIndex: index + 1,
+            status: 'error',
+            error: verifyError.message
+          });
+        }
+      }
+      else {
+        console.log(`Event ${index + 1} - Not SMS OTP or Voice OTP MFA factor`);
+        results.push({
+          eventIndex: index + 1,
+          status: 'skipped',
+          reason: 'Not SMS/Voice OTP factor'
+        });
       }
     }
-    if (phone_number===null) {
-            console.log ("can't retrieve phone number, possible not SMS OTP or Voice OTP MFA factor")
-        return callback (null, "can't retrieve phone number, possible not SMS OTP or Voice OTP MFA factor")
-    }
-    
-   //call Verify feedback API using phone number
-    let client = context.getTwilioClient();
-    let verification=await client.verify.v2.services(context.VERIFY_SID)
-        .verifications(phone_number).update({status: 'approved'});
-    
-    console.log (verification);
-    return callback (null,verification);
-    
-    }else {
-        console.log ("not SMS OTP or Voice OTP MFA factor")
-        return callback (null, "not SMS OTP or Voice OTP MFA factor")
-    }
 
-}catch (error){
-
+    // Return summary of processed events
+    const summary = {
+      totalEvents: mfa_events.length,
+      results: results
+    };
+    console.log("Processing complete:", summary);
+    return callback(null, summary);
+  }
+  catch (error) {
     console.error(error);
-    return callback(null, error);
-
-}
-
+    return callback(null, { error: error.message });
+  }
 };
