@@ -1,0 +1,15 @@
+{
+  "name": "okta-byot-inline-hooks",
+  "version": "1.0.0",
+  "description": "Okta telephony inline hooks using Twilio Verify",
+  "scripts": {
+    "start": "twilio serverless:start",
+    "dev": "twilio serverless:start --live --detailed-logs"
+  },
+  "dependencies": {
+    "@okta/okta-sdk-nodejs": "^7.0.0"
+  },
+  "devDependencies": {
+    "twilio-run": "^4.0.0"
+  }
+}
