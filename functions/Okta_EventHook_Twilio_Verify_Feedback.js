@@ -6,8 +6,6 @@ exports.handler = async function(context, event, callback) {
     if (context.auth_secret !== event.request.headers.auth_secret) {
       throw new Error("Authentication failed");
     }
-    const oktaBaseUrl = context.okta_org_baseurl;
-    const api_token = context.okta_auth_token;
 
     // One-off verification check required by Okta when enabling event inline hooks
     // https://developer.okta.com/docs/concepts/event-hooks/#one-time-verification-request
@@ -17,7 +15,10 @@ exports.handler = async function(context, event, callback) {
       return callback(null, { verification: verificationValue });
     }
 
-    console.log("event data: ", event.data);
+    const oktaBaseUrl = context.okta_org_baseurl;
+    const api_token = context.okta_auth_token;
+
+    console.log("event data: ", JSON.stringify(event.data));
 
     // Get all events from the array - Okta can bundle multiple events
     const mfa_events = event.data?.events || [];
@@ -36,7 +37,7 @@ exports.handler = async function(context, event, callback) {
 
     // Process each event in the array
     for (const [index, mfa_event] of mfa_events.entries()) {
-      console.log(`Processing event ${index + 1}/${mfa_events.length}:`, mfa_event);
+      console.log(`Processing event ${index + 1}/${mfa_events.length}:`, JSON.stringify(mfa_event));
       let channel = null;
 
       // Checks payload for SMS OTP or CALL OTP factor types
