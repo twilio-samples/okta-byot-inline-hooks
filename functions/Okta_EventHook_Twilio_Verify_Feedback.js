@@ -10,11 +10,11 @@ exports.handler = async function(context, event, callback) {
     const api_token = context.okta_auth_token;
 
     // One-off verification check required by Okta when enabling event inline hooks
+    // https://developer.okta.com/docs/concepts/event-hooks/#one-time-verification-request
     const verificationValue = event.request?.headers ? event.request.headers['x-okta-verification-challenge'] : null;
     if (verificationValue) {
       console.log("Verifying");
-      const responseBody = { verification: verificationValue };
-      return callback(null, JSON.stringify(responseBody));
+      return callback(null, { verification: verificationValue });
     }
 
     console.log("event data: ", event.data);
