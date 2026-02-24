@@ -31,10 +31,7 @@ exports.handler = async function(context, event, callback) {
     const OktaClient = new okta.Client({ orgUrl: oktaBaseUrl, token: api_token });
     const client = context.getTwilioClient();
 
-    const results = [];
-
-    // Process each event in the array
-    for (const [index, mfa_event] of mfa_events.entries()) {
+    const results = await Promise.all(mfa_events.map(async (mfa_event, index) => {
       console.log(`Processing event ${index + 1}/${mfa_events.length}`);
       let channel = null;
 
@@ -67,12 +64,11 @@ exports.handler = async function(context, event, callback) {
 
         if (phone_number === null) {
           console.log(`Event ${index + 1} - Can't retrieve phone number, possible not SMS OTP or Voice OTP MFA factor`);
-          results.push({
+          return {
             eventIndex: index + 1,
             status: 'skipped',
             reason: "Can't retrieve phone number"
-          });
-          continue;
+          };
         }
 
         try {
@@ -80,30 +76,38 @@ exports.handler = async function(context, event, callback) {
             .verifications(phone_number).update({status: 'approved'});
 
           console.log(`Event ${index + 1} - Verification '${verification.sid}' updated`);
-          results.push({
+          return {
             eventIndex: index + 1,
             status: 'success',
             phone_number: phone_number,
             verification_sid: verification.sid
-          });
+          };
         } catch (verifyError) {
+          if (verifyError.code === 20404) {
+            console.log(`Event ${index + 1} - No pending verification found for ${phone_number}`);
+            return {
+              eventIndex: index + 1,
+              status: 'skipped',
+              reason: 'No pending verification found. The Verification has already processed or is no longer active.'
+            };
+          }
           console.error(`Event ${index + 1} - Error updating verification:`, verifyError);
-          results.push({
+          return {
             eventIndex: index + 1,
             status: 'error',
             error: verifyError.message
-          });
+          };
         }
       }
       else {
         console.log(`Event ${index + 1} - Not SMS OTP or Voice OTP MFA factor`);
-        results.push({
+        return {
           eventIndex: index + 1,
           status: 'skipped',
           reason: 'Not SMS/Voice OTP factor'
-        });
+        };
       }
-    }
+    }));
 
     // Return summary of processed events
     const summary = {
