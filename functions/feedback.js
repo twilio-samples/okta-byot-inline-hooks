@@ -83,6 +83,14 @@ exports.handler = async function(context, event, callback) {
             verification_sid: verification.sid
           };
         } catch (verifyError) {
+          if (verifyError.code === 20404) {
+            console.log(`Event ${index + 1} - No pending verification found for ${phone_number}`);
+            return {
+              eventIndex: index + 1,
+              status: 'skipped',
+              reason: 'No pending verification found. The Verification has already processed or is no longer active.'
+            };
+          }
           console.error(`Event ${index + 1} - Error updating verification:`, verifyError);
           return {
             eventIndex: index + 1,
